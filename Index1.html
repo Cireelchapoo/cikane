@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultra Dashboard IA ULTIME</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI';}
+body{color:#fff;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);}
+.container{display:flex;height:100vh;}
+.sidebar{width:220px;background:rgba(0,0,0,0.4);padding:20px;}
+.sidebar button{display:block;width:100%;margin:10px 0;background:none;color:white;border:none;cursor:pointer;}
+.main{flex:1;padding:20px;overflow:auto;}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:15px;}
+.kpi-card{padding:15px;border-radius:10px;text-align:center;background:#2575fc;}
+.kpi-value{margin-top:10px;font-weight:bold;font-size:18px;}
+
+.table-container{overflow-x:auto;margin-top:20px;}
+.excel-table{width:100%;border-collapse:collapse;background:white;color:#333;font-size:13px;}
+.excel-table th{background:#6a11cb;color:white;padding:10px;}
+.excel-table td{padding:8px;border:1px solid #ddd;text-align:center;}
+
+.section{display:none;}
+.active{display:block;}
+
+canvas{background:white;border-radius:10px;margin-top:20px;}
+.alert-box{background:#fff;color:#000;padding:8px;border-radius:6px;margin:5px 0;}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="sidebar">
+<button onclick="show('overview')">🏠 KPI</button>
+<button onclick="show('tables')">📋 Tableau</button>
+<button onclick="show('pie')">🥧 Diagramme</button>
+</div>
+
+<div class="main">
+
+<div id="overview" class="section active">
+<h2>KPI</h2>
+
+<div class="kpi-grid">
+<div class="kpi-card">Projet<div class="kpi-value">0</div></div>
+<div class="kpi-card">En dev<div class="kpi-value">0</div></div>
+<div class="kpi-card">Design<div class="kpi-value">0</div></div>
+<div class="kpi-card">Livrés<div class="kpi-value">0</div></div>
+<div class="kpi-card">Etude<div class="kpi-value">0</div></div>
+<div class="kpi-card">Ready<div class="kpi-value">0</div></div>
+<div class="kpi-card">< 3 mois<div class="kpi-value">0</div></div>
+<div class="kpi-card">3-6 mois<div class="kpi-value">0</div></div>
+<div class="kpi-card">> 6 mois<div class="kpi-value">0</div></div>
+</div>
+
+<canvas id="kpiChartFull"></canvas>
+<canvas id="timelineChart"></canvas>
+
+<h3>🚨 Alertes IA</h3>
+<div id="alerts"></div>
+</div>
+
+<div id="tables" class="section">
+<h2>📊 Tableau</h2>
+
+<input type="file" id="excelFile" accept=".xlsx,.xls">
+<button onclick="importExcel()">📂 Import Excel</button>
+
+<div class="table-container">
+<table class="excel-table">
+<thead>
+<tr>
+<th>Projet</th><th>Squad</th><th>Partage</th>
+<th>Date EBM</th><th>Étude</th><th>Date Étude</th>
+<th>Design</th><th>Date livraison Design</th><th>Ready</th>
+<th>%</th><th>Dev</th><th>Date Livraison</th><th>Commentaire</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+</div>
+
+<div id="pie" class="section">
+<h2>Diagramme</h2>
+<canvas id="pieChart"></canvas>
+</div>
+
+</div>
+</div>
+
+<script>
+
+let pieChart,kpiChartFull,timelineChart;
+
+function show(id){
+document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+document.getElementById(id).classList.add('active');
+
+if(id==='overview'){
+updateKPICards();
+initKPIChartFull();
+initTimelineChart();
+detectDelays();
+}
+if(id==='pie') initPieChart();
+}
+
+function cleanText(text){
+return (text||"").toLowerCase().trim();
+}
+
+function detectPhase(text){
+text=cleanText(text);
+if(text.includes("en cours")) return "encours";
+if(text.includes("ok")||text.includes("termine")) return "done";
+if(text.includes("dev")) return "dev";
+if(text.includes("design")) return "design";
+if(text.includes("etude")) return "etude";
+if(text.includes("ready")) return "ready";
+return "";
+}
+
+function parseDate(value){
+if(!value) return null;
+
+if(typeof value === "number"){
+let date = new Date((value - 25569) * 86400 * 1000);
+date.setHours(0,0,0,0);
+return date;
+}
+
+if(typeof value === "string"){
+let parts = value.split(/[\/\-]/);
+if(parts.length === 3){
+let d = new Date(parts[2], parts[1]-1, parts[0]);
+d.setHours(0,0,0,0);
+return d;
+}
+}
+
+let d = new Date(value);
+if(!isNaN(d)){
+d.setHours(0,0,0,0);
+return d;
+}
+
+return null;
+}
+
+function calculateFullKPI(){
+
+const rows=document.querySelectorAll("#tables tbody tr");
+
+let total=0,dev=0,design=0,etude=0,ready=0,livre=0,m3=0,m6=0,m6plus=0;
+
+let today=new Date();
+today.setHours(0,0,0,0);
+
+rows.forEach(r=>{
+let c=r.querySelectorAll("td");
+
+let projet=c[0]?.innerText;
+if(!projet) return;
+
+total++;
+
+let phaseDev=detectPhase(c[10]?.innerText);
+let phaseDesign=detectPhase(c[6]?.innerText);
+let phaseEtude=detectPhase(c[4]?.innerText);
+let phaseReady=detectPhase(c[8]?.innerText);
+
+if(phaseDev==="encours"||phaseDev==="dev") dev++;
+if(phaseDesign==="done"||phaseDesign==="design") design++;
+if(phaseEtude==="encours"||phaseEtude==="etude") etude++;
+if(phaseReady==="done"||phaseReady==="ready") ready++;
+
+let dateEBM=parseDate(c[3]?.innerText);
+let dateLiv=parseDate(c[11]?.innerText);
+
+if(dateLiv){
+dateLiv.setHours(0,0,0,0);
+if(dateLiv.getTime() <= today.getTime()){
+livre++;
+}
+}
+
+if(dateEBM && dateLiv){
+let diff=(dateLiv-dateEBM)/(1000*60*60*24);
+if(diff<90) m3++;
+else if(diff<=180) m6++;
+else m6plus++;
+}
+});
+
+return [total,dev,design,livre,etude,ready,m3,m6,m6plus];
+}
+
+function updateKPICards(){
+let data=calculateFullKPI();
+document.querySelectorAll(".kpi-value").forEach((el,i)=>el.innerText=data[i]||0);
+}
+
+function initKPIChartFull(){
+
+let data=calculateFullKPI();
+
+if(kpiChartFull) kpiChartFull.destroy();
+
+kpiChartFull=new Chart(document.getElementById('kpiChartFull'),{
+type:'bar',
+data:{
+labels:["Projet","Dev","Design","Livré","Etude","Ready","<3M","3-6M",">6M"],
+datasets:[{data:data}]
+}
+});
+}
+
+function initTimelineChart(){
+
+const rows=document.querySelectorAll("#tables tbody tr");
+
+let labels=[],values=[];
+
+rows.forEach(r=>{
+let c=r.querySelectorAll("td");
+
+let p=c[0]?.innerText;
+let d1=parseDate(c[3]?.innerText);
+let d2=parseDate(c[11]?.innerText);
+
+if(p && d1 && d2){
+labels.push(p);
+values.push(Math.round((d2-d1)/(1000*60*60*24)));
+}
+});
+
+if(timelineChart) timelineChart.destroy();
+
+timelineChart=new Chart(document.getElementById('timelineChart'),{
+type:'bar',
+data:{labels,datasets:[{data:values}]}
+});
+}
+
+function initPieChart(){
+
+const rows=document.querySelectorAll("#tables tbody tr");
+
+let labels=[],values=[];
+
+rows.forEach(r=>{
+let c=r.querySelectorAll("td");
+let l=c[0]?.innerText;
+let v=parseInt(c[9]?.innerText)||0;
+
+if(v>0){labels.push(l);values.push(v);}
+});
+
+if(pieChart) pieChart.destroy();
+
+pieChart=new Chart(document.getElementById('pieChart'),{
+type:'pie',
+data:{labels,datasets:[{data:values}]}
+});
+}
+
+function detectDelays(){
+
+const rows=document.querySelectorAll("#tables tbody tr");
+
+let alerts=[];
+let today=new Date();
+today.setHours(0,0,0,0);
+
+rows.forEach(r=>{
+let c=r.querySelectorAll("td");
+
+let projet=c[0]?.innerText;
+let dateLiv=parseDate(c[11]?.innerText);
+
+if(!projet||!dateLiv) return;
+
+dateLiv.setHours(0,0,0,0);
+
+let diff=(dateLiv-today)/(1000*60*60*24);
+
+if(diff<0) alerts.push(`🔴 ${projet} EN RETARD`);
+else if(diff<=7) alerts.push(`🟠 ${projet} proche deadline`);
+});
+
+document.getElementById("alerts").innerHTML=
+alerts.map(a=>`<div class="alert-box">${a}</div>`).join("");
+}
+
+function importExcel(){
+
+const file=document.getElementById('excelFile').files[0];
+if(!file){alert("Choisis fichier");return;}
+
+const reader=new FileReader();
+
+reader.onload=function(e){
+
+const data=new Uint8Array(e.target.result);
+const wb=XLSX.read(data,{type:'array'});
+const sheet=wb.Sheets[wb.SheetNames[0]];
+
+const json=XLSX.utils.sheet_to_json(sheet,{
+header:1,
+raw:true
+});
+
+let tbody=document.querySelector("#tables tbody");
+tbody.innerHTML="";
+
+json.slice(1).forEach(r=>{
+if(!r[0]) return;
+
+let tr="<tr>";
+
+for(let i=0;i<13;i++){
+
+let val=r[i]||"";
+
+if([3,5,7,11].includes(i)){
+let d=parseDate(val);
+val=d?d.toLocaleDateString("fr-FR"):"";
+}
+
+tr+=`<td>${val}</td>`;
+}
+
+tr+="</tr>";
+
+tbody.innerHTML+=tr;
+});
+
+updateKPICards();
+};
+
+reader.readAsArrayBuffer(file);
+}
+
+</script>
+
+</body>
+</html>
